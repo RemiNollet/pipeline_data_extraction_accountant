@@ -6,6 +6,7 @@ Utilise les Structured Outputs (response_format) pour obtenir du JSON conforme a
 import base64
 import json
 import logging
+from pathlib import Path
 from typing import Optional
 
 from openai import OpenAI
@@ -15,24 +16,34 @@ from app.models.schemas import InvoiceData
 
 logger = logging.getLogger(__name__)
 
-# Instruction système pour le LLM (spécialisée pour zone OHADA).
-SYSTEM_PROMPT = """Tu es un expert comptable spécialisé dans le système OHADA et la fiscalité d'Afrique Francophone (Bénin, Togo, Côte d'Ivoire, etc.).
-Ton rôle est d'extraire avec une précision chirurgicale les données de factures pour un SaaS de comptabilité.
 
-### DIRECTIVES CRUCIALES :
-1. ANALYSE SPATIALE : Les factures peuvent être des scans ou des photos. Identifie bien le bloc "Vendeur" (souvent en haut) et "Client".
-2. CODES DE SÉCURITÉ : Pour les factures du Bénin, extrais impérativement le "Code MECeF/DGI" et le "NIM" si présents.
-3. MONTANTS :
-   - Ignore les symboles (FCFA, F.CFA, F) et les espaces. Retourne des nombres (float).
-   - Si la TVA n'est pas explicitement écrite mais qu'un groupe "E-TPS" ou "A-EX" est présent, la TVA peut être de 0.
-   - Attention aux factures d'assurance : la "Taxe d'enregistrement" ou les "Accessoires" ne sont pas de la TVA classique mais doivent être extraits dans les lignes de détail.
-4. VALIDATION : Si tu as un doute sur un montant, préfère mettre null plutôt que d'inventer (halluciner).
-5. CONFIANCE : Ajoute un score "confiance" entre 0 et 1 reflétant ta certitude globale sur l'extraction.
+def _load_system_prompt(prompt_version: str = "v1") -> str:
+    """
+    Charge le prompt système depuis un fichier.
+    Permet de gérer plusieurs versions de prompts (v1, v2, v3, etc.)
+    
+    Args:
+        prompt_version: Version du prompt (ex: "v1", "v2"). Défaut: "v1"
+    
+    Returns:
+        Contenu du fichier prompt, ou prompt par défaut si fichier non trouvé.
+    """
+    prompt_file = Path(__file__).parent.parent / "prompt" / f"prompt_{prompt_version}.txt"
+    
+    if prompt_file.exists():
+        try:
+            content = prompt_file.read_text(encoding="utf-8").strip()
+            logger.info("Prompt système chargé depuis %s", prompt_file)
+            return content
+        except Exception as e:
+            logger.warning("Erreur lecture fichier prompt %s: %s. Utilisation prompt par défaut.", prompt_file, e)
+    
+    # Prompt par défaut si fichier non trouvé
+    return "Extrait les données de cette facture au format JSON demandé."
 
-### CAS PARTICULIERS DÉTECTÉS :
-- Factures "LICOBERRE" : Le montant TTC est marqué avec un [E]. Le groupe "E-TPS" indique souvent une exonération.
-- Factures "NSIA" (Assurance) : Le "Prime TTC" est le montant total. Les taxes d'enregistrement ne sont pas de la TVA.
-- Factures "Notaire VITTIN" : Bien distinguer les Émoluments (souvent HT) des Frais Déboursés."""
+
+# Charge le prompt système depuis le fichier (version v1 par défaut)
+SYSTEM_PROMPT = _load_system_prompt("v1")
 
 
 def extract_invoice_from_image(
@@ -74,13 +85,50 @@ def extract_invoice_from_image(
         raise ValueError("Réponse LLM vide")
 
     raw = choice.message.content.strip()
-    # Gestion des blocs markdown ```json ... ```
-    if raw.startswith("```"):
-        lines = raw.split("\n")
-        raw = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+    # Nettoyage robuste : enlever markdown, commentaires, espaces
+    raw = _clean_json_response(raw)
 
     data = json.loads(raw)
     return InvoiceData.model_validate(data)
+
+
+def _clean_json_response(response: str) -> str:
+    """
+    Nettoie la réponse du LLM pour extraire du JSON valide.
+    Gère les cas courants :
+    - ```json ... ``` (markdown)
+    - Texte avant/après le JSON
+    - Commentaires // ou #
+    - Espaces et caractères invisibles
+    
+    Args:
+        response: Réponse brute du LLM
+    
+    Returns:
+        Chaîne JSON valide et nettoyée
+    """
+    # Enlever markdown ```json ... ```
+    if "```json" in response:
+        start = response.find("```json") + 7  # Longueur de "```json"
+        end = response.find("```", start)
+        if end != -1:
+            response = response[start:end]
+    elif "```" in response:
+        # Cas générique ```...```
+        start = response.find("```") + 3
+        end = response.find("```", start)
+        if end != -1:
+            response = response[start:end]
+    
+    # Chercher le JSON entre { et }
+    response = response.strip()
+    start = response.find("{")
+    end = response.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        response = response[start : end + 1]
+    
+    response = response.strip()
+    return response
 
 
 def _invoice_json_schema() -> dict:

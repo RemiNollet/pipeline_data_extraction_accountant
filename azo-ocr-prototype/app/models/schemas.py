@@ -41,7 +41,19 @@ class InvoiceData(BaseModel):
 
     @model_validator(mode="after")
     def check_ht_tva_ttc(self) -> "InvoiceData":
-        """Vérifie que montant_ht + montant_tva == montant_ttc (tolérance 0.05)."""
+        """
+        Vérifie que montant_ht + montant_tva == montant_ttc (tolérance 0.05).
+        
+        Exception : si montant_tva == 0.0, la validation est ignorée (cas probable d'assurance,
+        notaire, ou autre structure non standard). Dans ce cas, les données sont acceptées
+        mais la revue manuelle doit être signalée au niveau du pipeline.
+        """
+        # Cas particulier : TVA = 0 (probable assurance, notaire, structure spéciale)
+        if self.montant_tva == 0.0:
+            # Les données sont acceptées, le pipeline marquera needs_human_review = True
+            return self
+        
+        # Cas normal : vérifier HT + TVA == TTC
         somme = self.montant_ht + self.montant_tva
         ecart = abs(somme - self.montant_ttc)
         if ecart > MONTANT_TOLERANCE:

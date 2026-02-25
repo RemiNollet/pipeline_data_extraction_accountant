@@ -3,8 +3,11 @@ Routes API pour l'extraction de données facture.
 """
 
 import base64
+import csv
 import io
 import logging
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
@@ -85,9 +88,16 @@ async def extract(file: UploadFile = File(...)) -> ExtractResponse:
 
     result = run_extraction_pipeline(image_base64)
 
+    response_data = None
+    if result.data is not None:
+        response_data = result.data.model_dump()
+        _save_extraction_to_csv(file.filename or "unknown", response_data, result.needs_human_review)
+    else:
+        _save_extraction_to_csv(file.filename or "unknown", None, True, error_message=result.error_message)
+
     if result.data is not None:
         return ExtractResponse(
-            data=result.data.model_dump(),
+            data=response_data,
             needs_human_review=result.needs_human_review,
             error_message=result.error_message,
         )
@@ -96,3 +106,47 @@ async def extract(file: UploadFile = File(...)) -> ExtractResponse:
         needs_human_review=True,
         error_message=result.error_message,
     )
+
+
+def _save_extraction_to_csv(
+    filename: str,
+    data: dict[str, Any] | None,
+    needs_human_review: bool,
+    error_message: str | None = None,
+) -> None:
+    """Sauvegarde le résultat d'extraction dans un CSV dans le dossier resultats/."""
+    results_dir = Path(__file__).parent.parent.parent / "resultats"
+    results_dir.mkdir(exist_ok=True)
+
+    csv_file = results_dir / "extractions.csv"
+    file_exists = csv_file.exists()
+
+    timestamp = datetime.now().isoformat()
+
+    # Préparer les données à écrire
+    row = {
+        "timestamp": timestamp,
+        "fichier_source": filename,
+        "statut": "succès" if data is not None else "erreur",
+        "needs_human_review": needs_human_review,
+        "fournisseur": data.get("fournisseur", "") if data else "",
+        "numero_facture": data.get("numero_facture", "") if data else "",
+        "date": data.get("date", "") if data else "",
+        "montant_ht": data.get("montant_ht", "") if data else "",
+        "montant_tva": data.get("montant_tva", "") if data else "",
+        "montant_ttc": data.get("montant_ttc", "") if data else "",
+        "devise": data.get("devise", "") if data else "",
+        "ifu_fournisseur": data.get("ifu_fournisseur", "") if data else "",
+        "code_mecef": data.get("code_mecef", "") if data else "",
+        "confiance": data.get("confiance", "") if data else "",
+        "nombre_lignes": len(data.get("lignes_detail", [])) if data else 0,
+        "error_message": error_message or "",
+    }
+
+    with open(csv_file, mode="a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=row.keys())
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(row)
+
+    logger.info("Résultat extraction sauvegardé dans %s", csv_file)

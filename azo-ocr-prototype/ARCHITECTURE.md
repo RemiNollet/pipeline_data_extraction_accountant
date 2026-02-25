@@ -23,7 +23,7 @@ Le microservice orchestre un pipeline d'extraction de données facture via Visio
         │         Pipeline Cascading (ocr_pipeline)        │
         │                                                   │
         │  ┌────────────────────────────────────────────┐ │
-        │  │ Étape 1: gpt-4o-mini (rapide/économique)  │ │
+        │  │ Étape 1: gpt-4o-mini (Tentative 1)        │ │
         │  │ • Appel API OpenAI avec image             │ │
         │  │ • Réponse structurée (JSON)               │ │
         │  │ • Validation Pydantic                     │ │
@@ -35,10 +35,17 @@ Le microservice orchestre un pipeline d'extraction de données facture via Visio
         │        └────────┬──────────┘                     │
         │                 │                                │
         │                 │  ┌──────────────────────────┐  │
-        │                 │  │ Étape 2: gpt-4o (robust)│  │
-        │                 │  │ • Fallback si          │  │
-        │                 │  │   validation échouée    │  │
-        │                 │  │ • Log warning           │  │
+        │                 │  │ Étape 2: gpt-4o-mini    │  │
+        │                 │  │ (Tentative 2/Retry)     │  │
+        │                 │  └──────┬──────────────────┘  │
+        │                 │         │                     │
+        │        ┌────────▼──────────┐                     │
+        │        │ Succès? ✓         │ Échec? ✗          │
+        │        └────────┬──────────┘                     │
+        │                 │                                │
+        │                 │  ┌──────────────────────────┐  │
+        │                 │  │ Étape 3: gpt-4o         │  │
+        │                 │  │ (Fallback/Modèle lourd) │  │
         │                 │  └──────┬──────────────────┘  │
         │                 │         │                     │
         │                 └─────────┤ Succès? ✓           │
@@ -119,7 +126,19 @@ POST /api/v1/extract
 
 ### 2. **Pipeline d'extraction** (`ocr_pipeline.py`)
 
-**Étape 1 : modèle léger**
+**Étape 1 : gpt-4o-mini (Tentative 1)**
+```
+image_base64 → gpt-4o-mini → JSON → Pydantic validation
+                              ↓
+                        Validation OK?
+                        /            \
+                      OUI            NON
+                       ↓               ↓
+                    Retourner      Log warning
+                    (OK)           Retry
+```
+
+**Étape 2 : gpt-4o-mini (Tentative 2/Retry)**
 ```
 image_base64 → gpt-4o-mini → JSON → Pydantic validation
                               ↓
@@ -131,7 +150,7 @@ image_base64 → gpt-4o-mini → JSON → Pydantic validation
                     (OK)           Fallback
 ```
 
-**Étape 2 : fallback (modèle lourd)**
+**Étape 3 : gpt-4o (Fallback - Modèle lourd)**
 ```
 image_base64 → gpt-4o → JSON → Pydantic validation
                          ↓
@@ -198,7 +217,7 @@ class Settings(BaseSettings):
 - **Synchrone** (pas d'async pour le proto)
 - **Vision** : support des images en base64 (`data:image/jpeg;base64,...`)
 - **Structured Outputs** : schéma JSON strict pour garantir la conformité
-- `SYSTEM_PROMPT` : vide par défaut (à personnaliser selon besoin OHADA)
+- `SYSTEM_PROMPT` : rempli avec directives OHADA (IFU, MECeF, TVA, etc.)
 
 ### Appel API
 
