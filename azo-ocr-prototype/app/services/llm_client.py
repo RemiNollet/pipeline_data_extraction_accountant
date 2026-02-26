@@ -43,7 +43,7 @@ def _load_system_prompt(prompt_version: str = "v1") -> str:
 
 
 # Charge le prompt système depuis le fichier (version v1 par défaut)
-SYSTEM_PROMPT = _load_system_prompt("v1")
+SYSTEM_PROMPT = _load_system_prompt("v2")
 
 
 def extract_invoice_from_image(

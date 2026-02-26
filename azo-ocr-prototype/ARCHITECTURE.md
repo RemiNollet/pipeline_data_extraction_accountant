@@ -1,8 +1,8 @@
 # Architecture du Microservice AZO OCR
 
-## 🎯 Vue d'ensemble
+## Vue d'ensemble
 
-Le microservice orchestre un pipeline d'extraction de données facture via Vision-Language Model avec **fallback cascading** pour la fiabilité.
+Le microservice orchestre un pipeline d'extraction de données facture via Vision-Language Model avec fallback cascading pour la fiabilité.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -21,43 +21,51 @@ Le microservice orchestre un pipeline d'extraction de données facture via Visio
                                ▼
         ┌──────────────────────────────────────────────────┐
         │         Pipeline Cascading (ocr_pipeline)        │
-        │                                                   │
-        │  ┌────────────────────────────────────────────┐ │
-        │  │ Étape 1: gpt-4o-mini (Tentative 1)        │ │
-        │  │ • Appel API OpenAI avec image             │ │
-        │  │ • Réponse structurée (JSON)               │ │
-        │  │ • Validation Pydantic                     │ │
-        │  │   └─ Montants: HT + TVA == TTC (±0.05)   │ │
-        │  └──────────────┬─────────────────────────────┘ │
+        │                                                  │
+        │  ┌────────────────────────────────────────────┐  │
+        │  │ Étape 1: gpt-4o-mini (Tentative 1)         │  │
+        │  │ • Appel API OpenAI avec image              │  │
+        │  │ • Réponse structurée (JSON)                │  │ 
+        │  │ • Validation Pydantic                      │  │
+        │  │   └─ Montants: HT + TVA == TTC (±0.05)     │  │
+        │  └──────────────┬─────────────────────────────┘  │
         │                 │                                │
         │        ┌────────▼──────────┐                     │
-        │        │ Succès? ✓         │ Échec? ✗          │
+        │        │ Succès?           │ Échec?              │
         │        └────────┬──────────┘                     │
         │                 │                                │
         │                 │  ┌──────────────────────────┐  │
-        │                 │  │ Étape 2: gpt-4o-mini    │  │
-        │                 │  │ (Tentative 2/Retry)     │  │
-        │                 │  └──────┬──────────────────┘  │
-        │                 │         │                     │
+        │                 │  │ Étape 2: gpt-4o-mini     │  │
+        │                 │  │ (Tentative 2/Retry)      │  │
+        │                 │  └──────┬────────────────── ┘  │
+        │                 │         │                      │
         │        ┌────────▼──────────┐                     │
-        │        │ Succès? ✓         │ Échec? ✗          │
+        │        │ Succès?           │ Échec?              │
         │        └────────┬──────────┘                     │
         │                 │                                │
         │                 │  ┌──────────────────────────┐  │
-        │                 │  │ Étape 3: gpt-4o         │  │
-        │                 │  │ (Fallback/Modèle lourd) │  │
-        │                 │  └──────┬──────────────────┘  │
-        │                 │         │                     │
-        │                 └─────────┤ Succès? ✓           │
-        │                           │                     │
-        │                    ┌──────▼────────────┐        │
-        │                    │ Échec aussi? ✗    │        │
-        │                    │ → human_review    │        │
-        │                    │   = true           │        │
-        │                    └───────────────────┘        │
+        │                 │  │ Étape 3: gpt-4o          │  │
+        │                 │  │ (Fallback/Modèle lourd)  │  │
+        │                 │  └──────┬────────────────── ┘  │
+        │                 │         │                      │
+        │                 └─────────┤ Succès?              │
+        │                           │                      │
+        │                    ┌──────▼────────────┐         │
+        │                    │ Échec aussi?      │         │
+        │                    │ → human_review    │         │
+        │                    │   = true          │         │
+        │                    └───────────────────┘         │
         └───────────────────────┬──────────────────────────┘
                                 │
                                 ▼
+        ┌──────────────────────────────────────────────┐
+        │  Normalisation des données (normalization)   │
+        │  • Nettoyage des montants                    │
+        │  • Conversion format décimal                 │ 
+        │  • Normalisation dates                       │
+        └──────────────────────┬───────────────────────┘
+                               │
+                               ▼
         ┌───────────────────────────────────────────────┐
         │  ExtractionResult                             │
         │  • data: InvoiceData | None                   │
@@ -68,15 +76,22 @@ Le microservice orchestre un pipeline d'extraction de données facture via Visio
                             ▼
         ┌──────────────────────────────────────────────┐
         │        Réponse API                           │
-        │  {                                            │
-        │    "data": {...} | null,                    │
-        │    "needs_human_review": bool,              │
-        │    "error_message": str | null              │
-        │  }                                            │
+        │  {                                           │
+        │    "data": {...} | null,                     │
+        │    "needs_human_review": bool,               │
+        │    "error_message": str | null               │
+        │  }                                           │
+        └──────────────────────┬───────────────────────┘
+                               │
+                               ▼
+        ┌──────────────────────────────────────────────┐
+        │  Stockage des résultats (resultats/csv)      │
+        │  • Fichier: extractions.csv                  │
+        │  • Timestamp, statut, données, erreurs       │
         └──────────────────────────────────────────────┘
 ```
 
-## 📂 Structure des fichiers
+## Structure des fichiers
 
 ```
 azo-ocr-prototype/
@@ -99,11 +114,32 @@ azo-ocr-prototype/
 │   │   ├── validation.py                # validate_invoice_math()
 │   │   └── constants.py                 # MONTANT_TOLERANCE, MathValidationError
 │   │
-│   └── services/
-│       ├── __init__.py
-│       ├── llm_client.py                # Client OpenAI + Structured Outputs
-│       ├── ocr_pipeline.py              # Orchestration et cascading
-│       └── normalization.py             # Nettoyage de données
+│   ├── services/
+│   │   ├── __init__.py
+│   │   ├── llm_client.py                # Client OpenAI + Structured Outputs
+│   │   ├── ocr_pipeline.py              # Orchestration et cascading
+│   │   └── normalization.py             # Nettoyage de données
+│   │
+│   └── prompt/
+│       ├── prompt_v1.txt                # Prompt système pour extraction (v1)
+│       └── prompt_v2.txt                # Prompt système alternatif (v2+)
+│
+├── test/
+│   ├── __init__.py
+│   ├── test_pipeline.py                 # Test complet du pipeline
+│   ├── test_normalization.py            # Tests unitaires normalisation
+│   ├── test_validation.py               # Tests unitaires validation
+│   ├── test_llm_client.py               # Tests unitaires LLM client
+│   ├── test_ocr_pipeline.py             # Tests unitaires pipeline OCR
+│   └── test_routes.py                   # Tests unitaires API
+│
+├── sample_invoices/                     # Dossier de factures de test
+│   ├── Facture_MEDEO_AFRICA_MOIS_DE_FEVRIER.pdf
+│   ├── Facture_MEDEO_AFRICA_MOIS_DE_MARS.pdf
+│   └── [autres factures de test]
+│
+├── resultats/                           # Résultats des extractions
+│   └── extractions.csv                  # CSV avec toutes les extractions
 │
 ├── requirements.txt                     # Dépendances Python
 ├── README.md                             # Guide d'utilisation
@@ -111,9 +147,9 @@ azo-ocr-prototype/
 └── .env                                  # Configuration (non versionné)
 ```
 
-## 🔄 Flux de traitement détaillé
+## Flux de traitement détaillé
 
-### 1. **Réception du fichier** (`routes.py`)
+### 1. Réception du fichier (routes.py)
 
 ```python
 POST /api/v1/extract
@@ -124,7 +160,7 @@ POST /api/v1/extract
 - Lecture du fichier
 - Conversion en image base64 (PDF: 1ère page uniquement via `pdf2image`)
 
-### 2. **Pipeline d'extraction** (`ocr_pipeline.py`)
+### 2. Pipeline d'extraction (ocr_pipeline.py)
 
 **Étape 1 : gpt-4o-mini (Tentative 1)**
 ```
@@ -162,7 +198,7 @@ image_base64 → gpt-4o → JSON → Pydantic validation
                (OK)         human_review=True
 ```
 
-### 3. **Schéma de réponse** (`schemas.py`)
+### 3. Schéma de réponse (schemas.py)
 
 ```python
 InvoiceData {
@@ -185,16 +221,16 @@ InvoiceData {
 
 **Validation métier** : `montant_ht + montant_tva == montant_ttc` (tolérance ±0.05)
 
-### 4. **Normalisation** (`normalization.py`)
+### 4. Normalisation (normalization.py)
 
 Fonctions utilitaires pour nettoyer les données :
 - `clean_amount_string()` : enlever espaces, symboles monétaires
 - `string_to_float()` : convertir chaîne en float
 - `normalize_date_string()` : formater dates
 
-## 🔐 Configuration
+## Configuration
 
-### Fichier `config.py`
+### Fichier config.py
 
 Utilise **Pydantic BaseSettings** pour charger depuis `.env` :
 
@@ -210,9 +246,9 @@ class Settings(BaseSettings):
     )
 ```
 
-## 🤖 Intégration OpenAI
+## Intégration OpenAI
 
-### Client (`llm_client.py`)
+### Client (llm_client.py)
 
 - **Synchrone** (pas d'async pour le proto)
 - **Vision** : support des images en base64 (`data:image/jpeg;base64,...`)
@@ -238,7 +274,7 @@ response = client.chat.completions.create(
 )
 ```
 
-## ⚙️ Gestion des erreurs
+## Gestion des erreurs
 
 ### Cas d'erreur et fallback
 
@@ -251,7 +287,7 @@ response = client.chat.completions.create(
 
 ### Code d'erreur métier
 
-**`MathValidationError`** : levée si `HT + TVA ≠ TTC` (écart > 0.05)
+**MathValidationError** : levée si HT + TVA ≠ TTC (écart > 0.05)
 
 ```python
 raise MathValidationError(
@@ -262,17 +298,19 @@ raise MathValidationError(
 )
 ```
 
-## 🚀 Évolutions futures
+## Évolutions futures
 
-- [ ] Ajouter un `SYSTEM_PROMPT` personnalisé pour zone OHADA
+- [ ] Optimisation du prompt en fonctions des resultats
 - [ ] Intégrer une basse de données pour historique extractions
 - [ ] Ajouter un endpoint de revue/correction manuelle
-- [ ] Métriques : taux de succès, latence moyenne par modèle
-- [ ] Cache pour images identiques
+- [ ] Création d'un golden dataset pour l'evaluation et l'amelioration continue
+- [ ] Métriques : taux de succès, latence moyenne par modèle, accuracy champs par champs, metriques de couts...
+- [ ] Tester une plus grande diversité de models et fournisseurs, ou un intégrer un model Mistral local si RGPD prioritaire.
+- [ ] Cache pour factures identiques
 - [ ] Support multi-pages PDF (pas juste 1ère page)
-- [ ] Async complet (await sur appels API)
+- [ ] Pipeline totalement Asynchrone avec plusieurs workers pour reduire la latence.
 
-## 📊 Métriques de performance
+## Métriques de performance
 
 **Modèles** :
 - `gpt-4o-mini` : ~2 sec, ~0.2 cents/appel → **1ère tentative**
@@ -283,7 +321,7 @@ raise MathValidationError(
 - Fallback nécessaire : ~7-8 sec
 - Revue manuelle : ∞ (attente utilisateur)
 
-## 🔗 Dépendances clés
+## Dépendances clés
 
 | Package | Rôle |
 |---------|------|
